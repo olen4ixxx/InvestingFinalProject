@@ -1,39 +1,47 @@
 package io.olen4ixxx.investing.pool;
 
-import java.io.IOException;
-import java.io.InputStream;
-import java.sql.*;
+import io.olen4ixxx.investing.util.PropertiesInitializer;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.SQLException;
 import java.util.Properties;
 
 class ConnectionPoolInitializer {
+    private static final Logger logger = LogManager.getLogger();
+    private static String url;
+    private static String username;
+    private static String password;
+    private static String driver;
+    private static int poolSize;
+
+    private ConnectionPoolInitializer() {
+    }
+
     static void init() {
         // TODO: getConnections
-        // get login etc. from props (some default cases)
+        Properties properties = PropertiesInitializer.initProperties();
+        url = (String) properties.get("db.url");
+        username = (String) properties.get("db.username");
+        password = (String) properties.get("db.password");
+        driver = (String) properties.get("db.driver");
+        poolSize = (int) properties.get("poolSize"); // TODO: 24.12.2021
         try {
-            DriverManager.registerDriver(new com.mysql.cj.jdbc.Driver());
-        } catch (SQLException e) {
-            e.printStackTrace();
+            Class.forName(driver);
+        } catch (ClassNotFoundException e) {
+            logger.error("Driver registration failed", e);
         }
-//        if no connections or <2 => exceptionInInitializationError or RunTime and stop app
-//        if <n from props getMoreConnections
-        Properties properties = new Properties();
-        ClassLoader classLoader = ConnectionPoolInitializer.class.getClassLoader();
-        InputStream inputStream = classLoader.getResourceAsStream("application.properties");
+    }
+
+    static ProxyConnection establishConnection() {
+        Connection connection = null;
         try {
-            properties.load(inputStream);
-        } catch (IOException e) {
-            e.printStackTrace();
-        }
-        String url = (String) properties.get("db.url");
-        String username = (String) properties.get("db.username");
-        String password = (String) properties.get("db.password");
-        try (Connection connection = DriverManager.getConnection(url, username, password)) {
-            Statement statement = connection.createStatement();
-            ResultSet resultSet = statement.executeQuery("select * from users;");
-            resultSet.next();
-            System.out.println(resultSet.getString(4)); // FIXME: 22.12.2021 
+            connection = DriverManager.getConnection(url, username, password);
         } catch (SQLException e) {
-            e.printStackTrace();
+            logger.error("Connection get failed", e);
         }
+        return new ProxyConnection(connection);
     }
 }

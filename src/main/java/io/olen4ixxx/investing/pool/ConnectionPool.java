@@ -3,11 +3,9 @@ package io.olen4ixxx.investing.pool;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
-import java.io.IOException;
-import java.io.InputStream;
-import java.lang.module.Configuration;
-import java.sql.*;
-import java.util.Properties;
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.SQLException;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -15,9 +13,8 @@ import java.util.concurrent.locks.ReentrantLock;
 
 public class ConnectionPool {
     private static final Logger logger = LogManager.getLogger();
-//    private static final String DB_URL;
-//    private static final String DB_USERNAME;
-//    private static final String DB_PASSWORD;
+    private static final int DEFAULT_POOL_CAPACITY = 7;
+    private static final int ATTEMPTS_TO_FILL_POOL = 3;
 
     private static ConnectionPool instance;
     private BlockingQueue<ProxyConnection> availableConnections;
@@ -26,20 +23,31 @@ public class ConnectionPool {
     private static final AtomicBoolean isCreated = new AtomicBoolean(false);
 
 
-
     private ConnectionPool() {
-        // TODO: register driver
         init();
     }
 
     private void init() {
         // TODO: get connections from util class
-//        Driver manager.getConnection in try and catch with log
+        availableConnections = new LinkedBlockingQueue<>(DEFAULT_POOL_CAPACITY); // FIXME: constant/properties
+        int k = 0;
+        while (availableConnections.size() < DEFAULT_POOL_CAPACITY || k < ATTEMPTS_TO_FILL_POOL) {
+            for (int i = 0; i < DEFAULT_POOL_CAPACITY; i++) {
+                try {
+                    availableConnections.put(ConnectionPoolInitializer.establishConnection());
+                } catch (InterruptedException e) {
+                    logger.error("Connection put failed", e);
+                }
+            }
+            k++;
+        }
+        if (availableConnections.size() < DEFAULT_POOL_CAPACITY) { // FIXME: always false?
+            logger.fatal("Pool init failed");
+            throw new RuntimeException("Pool init failed");
+        }
 //        if no connections or <2 => exceptionInInitializationError or RunTime and stop app
 //        if <n from props getMoreConnections
-        availableConnections = new LinkedBlockingQueue<>(7); // FIXME: constant
         usedConnections = new LinkedBlockingQueue<>();
-        ConnectionPoolInitializer.init();
     }
 
     public static ConnectionPool getInstance() {
@@ -64,13 +72,13 @@ public class ConnectionPool {
             connection = availableConnections.take();
             usedConnections.put(connection);
         } catch (InterruptedException e) {
-            //log
+            logger.error("Connection take failed", e);
             Thread.currentThread().interrupt();
         }
         return connection;
     }
 
-    public boolean releaseConnection(Connection connection) {
+    public void releaseConnection(Connection connection) {
         //check getClass = proxyConnection, cast
         //control through timerTask time to time
         if (connection instanceof ProxyConnection proxyConnection) {
@@ -78,17 +86,29 @@ public class ConnectionPool {
             try {
                 availableConnections.put(proxyConnection);
             } catch (InterruptedException e) {
-                e.printStackTrace();
+                logger.error("Connection release failed", e);
             }
         }
-        return true; // TODO: 21.12.2021
     }
 
     public void closePool() { // FIXME: boolean?
-        //fori -> take only from available -> closeActually
+        for (int i = 0; i < availableConnections.size(); i++) {
+            try {
+                ProxyConnection connection = availableConnections.take();
+                connection.closeActually();
+            } catch (InterruptedException | SQLException e) {
+                logger.error("Pool close failed", e);
+            }
+        }
     }
 
     private void deregisterDrivers() {
-        //lambda
+        DriverManager.getDrivers().asIterator().forEachRemaining(driver -> {
+            try {
+                DriverManager.deregisterDriver(driver);
+            } catch (SQLException e) {
+                logger.error("Driver deregistration failed", e);
+            }
+        });
     }
 }
